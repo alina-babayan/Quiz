@@ -14,7 +14,6 @@ ApplicationWindow {
     Material.primary: Material.Teal
     Material.accent: Material.Orange
 
-    // GLOBAL WHITE TEXT FIX
     palette {
         text: "white"
         windowText: "white"
@@ -34,30 +33,23 @@ ApplicationWindow {
     property color buttonTextColor: "white"
     property int buttonRadius: 8
 
-    // Initialize Database
     function initDB() {
         var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
         db.transaction(function(tx) {
-            // Users table
             tx.executeSql("CREATE TABLE IF NOT EXISTS Users (user_id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin', 'user')), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
-            // Quizzes table
             tx.executeSql("CREATE TABLE IF NOT EXISTS Quizzes (quiz_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT, created_by INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
-            // Questions table
             tx.executeSql("CREATE TABLE IF NOT EXISTS Questions (question_id INTEGER PRIMARY KEY AUTOINCREMENT, quiz_id INTEGER NOT NULL, text TEXT NOT NULL)");
 
-            // Options table
             tx.executeSql("CREATE TABLE IF NOT EXISTS Options (option_id INTEGER PRIMARY KEY AUTOINCREMENT, question_id INTEGER NOT NULL, text TEXT NOT NULL, is_correct INTEGER NOT NULL CHECK (is_correct IN (0, 1)))");
 
-            // UserQuizzes table for scores
             tx.executeSql("CREATE TABLE IF NOT EXISTS UserQuizzes (participation_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, quiz_id INTEGER NOT NULL, score INTEGER CHECK (score >= 0 AND score <= 100), completed_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
             console.log("Database initialized");
         });
     }
 
-    // User functions
     function registerUser(username, password, role) {
         var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
         var success = false;
@@ -90,7 +82,6 @@ ApplicationWindow {
         return user;
     }
 
-    // Quiz functions
     function createQuiz(title, description) {
         var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
         var quizId = -1;
@@ -244,6 +235,32 @@ ApplicationWindow {
         return scores;
     }
 
+    function deleteQuiz(quizId) {
+         var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+         var success = false;
+         db.transaction(function(tx) {
+             try {
+                 tx.executeSql("DELETE FROM UserQuizzes WHERE quiz_id = ?", [quizId]);
+
+                 var qRes = tx.executeSql("SELECT question_id FROM Questions WHERE quiz_id = ?", [quizId]);
+
+                 for (var i = 0; i < qRes.rows.length; i++) {
+                     var questionId = qRes.rows.item(i).question_id;
+                     tx.executeSql("DELETE FROM Options WHERE question_id = ?", [questionId]);
+                 }
+
+                 tx.executeSql("DELETE FROM Questions WHERE quiz_id = ?", [quizId]);
+
+                 tx.executeSql("DELETE FROM Quizzes WHERE quiz_id = ?", [quizId]);
+
+                 success = true;
+                 console.log("Quiz", quizId, "deleted successfully");
+             } catch (e) {
+                 console.log("Delete error:", e.message);
+             }
+         });
+         return success;
+     }
     Component.onCompleted: {
         initDB();
     }
@@ -260,7 +277,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== LOGIN COMPONENT ===================
     Component {
         id: loginComponent
         Page {
@@ -382,7 +398,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== REGISTER COMPONENT ===================
     Component {
         id: registerComponent
         Page {
@@ -580,7 +595,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== ADMIN COMPONENT (Quiz Creator) ===================
     Component {
         id: adminComponent
         Page {
@@ -707,7 +721,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== CREATE QUIZ COMPONENT ===================
     Component {
         id: createQuizComponent
         Page {
@@ -806,7 +819,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== CREATE QUESTION COMPONENT ===================
     Component {
         id: createQuestionComponent
         Page {
@@ -881,7 +893,7 @@ ApplicationWindow {
                                 id: optInput
                                 placeholderText: "Option " + (index + 1)
                                 Layout.fillWidth: true
-                                color: "black"
+                                color: "white"
                                 background: Rectangle {
                                     radius: 8
                                     color: Material.color(Material.Grey, Material.Shade200)
@@ -940,7 +952,6 @@ ApplicationWindow {
                                 var hasOptions = false;
                                 var options = [];
 
-                                // Collect options
                                 for (var i = 0; i < 4; i++) {
                                     var optRow = optionsRepeater.itemAt(i);
                                     var textField = optRow.children[0];
@@ -965,10 +976,8 @@ ApplicationWindow {
                                     return;
                                 }
 
-                                // Add question
                                 var questionId = addQuestion(currentQuiz.quiz_id, qTextInput.text);
 
-                                // Add options
                                 for (var j = 0; j < options.length; j++) {
                                     addOption(questionId, options[j].text, options[j].isCorrect);
                                 }
@@ -976,7 +985,6 @@ ApplicationWindow {
                                 questionCount++;
                                 qTextInput.text = "";
 
-                                // Reset options
                                 for (var k = 0; k < 4; k++) {
                                     var resetRow = optionsRepeater.itemAt(k);
                                     resetRow.children[0].text = "";
@@ -1015,7 +1023,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== USER COMPONENT (Quiz Taker) ===================
     Component {
         id: userComponent
         Page {
@@ -1152,7 +1159,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== SCORES COMPONENT ===================
     Component {
         id: scoresComponent
         Page {
@@ -1244,7 +1250,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== QUIZ TAKE COMPONENT ===================
     Component {
         id: quizTakeComponent
         Page {
@@ -1398,7 +1403,6 @@ ApplicationWindow {
         }
     }
 
-    // =================== RESULT COMPONENT ===================
     Component {
         id: resultComponent
         Page {

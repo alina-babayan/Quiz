@@ -79,7 +79,6 @@ void DatabaseManager::initDatabase() {
 
 QJsonArray DatabaseManager::getQuizzes() {
     QJsonArray arr;
-    // Use "Quizzes" not "Quiz"
     QSqlQuery query("SELECT quiz_id, title, description FROM Quizzes ORDER BY created_at DESC");
     while (query.next()) {
         QJsonObject obj;
@@ -95,7 +94,6 @@ QJsonArray DatabaseManager::getQuizzes() {
 QJsonObject DatabaseManager::getQuiz(int quizId) {
     QJsonObject quizObj;
     QSqlQuery query;
-    // Use "Quizzes" not "Quiz"
     query.prepare("SELECT quiz_id, title, description FROM Quizzes WHERE quiz_id = ?");
     query.addBindValue(quizId);
     if(query.exec() && query.next()) {
@@ -103,7 +101,6 @@ QJsonObject DatabaseManager::getQuiz(int quizId) {
         quizObj["title"] = query.value(1).toString();
         quizObj["description"] = query.value(2).toString();
 
-        // Load questions - use "Questions" not "Question"
         QSqlQuery q2;
         q2.prepare("SELECT question_id, text FROM Questions WHERE quiz_id = ?");
         q2.addBindValue(quizId);
@@ -115,7 +112,6 @@ QJsonObject DatabaseManager::getQuiz(int quizId) {
                 qobj["id"] = qid;
                 qobj["text"] = q2.value(1).toString();
 
-                // Load choices - use "Options" not "Choice"
                 QSqlQuery q3;
                 q3.prepare("SELECT option_id, text, is_correct FROM Options WHERE question_id = ?");
                 q3.addBindValue(qid);
@@ -138,17 +134,9 @@ QJsonObject DatabaseManager::getQuiz(int quizId) {
     return quizObj;
 }
 
-// //void DatabaseManager::addQuiz(const QString &title, const QString &description) {
-//     QSqlQuery query;
-//     query.prepare("INSERT INTO Quiz (title, description, published) VALUES (?, ?, 0)");
-//     query.addBindValue(title);
-//     query.addBindValue(description);
-//     query.exec();
-// }
 
 void DatabaseManager::addQuestion(int quizId, const QString &text, const QString &type, int points) {
     QSqlQuery query;
-    // Use "Questions" not "Question"
     query.prepare("INSERT INTO Questions (quiz_id, text, question_type) VALUES (?, ?, ?)");
     query.addBindValue(quizId);
     query.addBindValue(text);
@@ -163,7 +151,6 @@ void DatabaseManager::addQuestion(int quizId, const QString &text, const QString
 
 void DatabaseManager::addChoice(int questionId, const QString &text, bool isCorrect) {
     QSqlQuery query;
-    // Use "Options" not "Choice"
     query.prepare("INSERT INTO Options (question_id, text, is_correct) VALUES (?, ?, ?)");
     query.addBindValue(questionId);
     query.addBindValue(text);
@@ -191,7 +178,6 @@ double DatabaseManager::submitAttempt(int quizId, const QJsonArray &answers, int
         int questionId = obj["questionId"].toInt();
         QJsonValue answerVal = obj["answer"];
 
-        // Load question info
         QSqlQuery q2;
         q2.prepare("SELECT type, points FROM Question WHERE question_id=?");
         q2.addBindValue(questionId);
@@ -244,7 +230,7 @@ double DatabaseManager::submitAttempt(int quizId, const QJsonArray &answers, int
                 qins.addBindValue(questionId);
                 qins.addBindValue(textAnswer);
                 qins.exec();
-                awarded = 0; // manual grading
+                awarded = 0;
             }
 
             totalScore += awarded;
@@ -270,7 +256,7 @@ bool DatabaseManager::addUser(const QString &username,
     query.addBindValue(username);
     query.addBindValue(displayName);
     query.addBindValue(role);
-    query.addBindValue(password);  // plaintext, կամ hash հ senere
+    query.addBindValue(password);
 
     if(!query.exec()) {
         qWarning() << "Add user failed:" << query.lastError().text();
@@ -302,11 +288,9 @@ QString DatabaseManager::getUserRole(const QString &username) {
 }
 int DatabaseManager::addQuiz(const QString &title, const QString &description) {
     QSqlQuery query;
-    // Note: Use "Quizzes" not "Quiz" to match your schema
     query.prepare("INSERT INTO Quizzes (title, description, created_by) VALUES (?, ?, 1)");
     query.addBindValue(title);
     query.addBindValue(description);
-    // Note: created_by is set to 1 for now - you'll need to pass actual user_id later
 
     if (query.exec()) {
         int quizId = query.lastInsertId().toInt();
