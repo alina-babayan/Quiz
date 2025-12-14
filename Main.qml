@@ -1,0 +1,1464 @@
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Controls.Material 2.15
+import QtQuick.Layouts 1.15
+import QtQuick.LocalStorage 2.15 as Sql
+
+ApplicationWindow {
+    id: window
+    visible: true
+    width: 1400
+    height: 800
+    title: "Quiz System"
+    Material.theme: Material.Dark
+    Material.primary: Material.Teal
+    Material.accent: Material.Orange
+
+    // GLOBAL WHITE TEXT FIX
+    palette {
+        text: "white"
+        windowText: "white"
+        buttonText: "white"
+        base: Material.color(Material.Grey, Material.Shade800)
+        highlight: Material.accent
+        highlightedText: "white"
+    }
+
+    property var currentUser: null
+    property var currentQuiz: null
+    property var userAnswers: ({})
+    property double resultScore: 0
+    property string dbPath: "quizsystem.db"
+
+    property color buttonBgColor: Material.color(Material.Teal, Material.Shade100)
+    property color buttonTextColor: "white"
+    property int buttonRadius: 8
+
+    // Initialize Database
+    function initDB() {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        db.transaction(function(tx) {
+            // Users table
+            tx.executeSql("CREATE TABLE IF NOT EXISTS Users (user_id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin', 'user')), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+
+            // Quizzes table
+            tx.executeSql("CREATE TABLE IF NOT EXISTS Quizzes (quiz_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT, created_by INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+
+            // Questions table
+            tx.executeSql("CREATE TABLE IF NOT EXISTS Questions (question_id INTEGER PRIMARY KEY AUTOINCREMENT, quiz_id INTEGER NOT NULL, text TEXT NOT NULL)");
+
+            // Options table
+            tx.executeSql("CREATE TABLE IF NOT EXISTS Options (option_id INTEGER PRIMARY KEY AUTOINCREMENT, question_id INTEGER NOT NULL, text TEXT NOT NULL, is_correct INTEGER NOT NULL CHECK (is_correct IN (0, 1)))");
+
+            // UserQuizzes table for scores
+            tx.executeSql("CREATE TABLE IF NOT EXISTS UserQuizzes (participation_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, quiz_id INTEGER NOT NULL, score INTEGER CHECK (score >= 0 AND score <= 100), completed_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+
+            console.log("Database initialized");
+        });
+    }
+
+    // User functions
+    function registerUser(username, password, role) {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var success = false;
+        db.transaction(function(tx) {
+            try {
+                tx.executeSql("INSERT INTO Users (username, password, role) VALUES (?, ?, ?)", [username, password, role]);
+                success = true;
+                console.log("User registered:", username, "Role:", role);
+            } catch (e) {
+                console.log("Registration error:", e.message);
+            }
+        });
+        return success;
+    }
+
+    function loginUser(username, password) {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var user = null;
+        db.transaction(function(tx) {
+            var res = tx.executeSql("SELECT user_id, username, role FROM Users WHERE username = ? AND password = ?", [username, password]);
+            if (res.rows.length > 0) {
+                user = {
+                    user_id: res.rows.item(0).user_id,
+                    username: res.rows.item(0).username,
+                    role: res.rows.item(0).role
+                };
+                console.log("User logged in:", user.username, "Role:", user.role);
+            }
+        });
+        return user;
+    }
+
+    // Quiz functions
+    function createQuiz(title, description) {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var quizId = -1;
+        db.transaction(function(tx) {
+            var res = tx.executeSql("INSERT INTO Quizzes (title, description, created_by) VALUES (?, ?, ?)",
+                [title, description, currentUser.user_id]);
+            quizId = res.insertId;
+            console.log("Quiz created with ID:", quizId);
+        });
+        return quizId;
+    }
+
+    function addQuestion(quizId, text) {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var questionId = -1;
+        db.transaction(function(tx) {
+            var res = tx.executeSql("INSERT INTO Questions (quiz_id, text) VALUES (?, ?)", [quizId, text]);
+            questionId = res.insertId;
+            console.log("Question added with ID:", questionId);
+        });
+        return questionId;
+    }
+
+    function addOption(questionId, text, isCorrect) {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        db.transaction(function(tx) {
+            tx.executeSql("INSERT INTO Options (question_id, text, is_correct) VALUES (?, ?, ?)",
+                [questionId, text, isCorrect ? 1 : 0]);
+            console.log("Option added:", text, "Correct:", isCorrect);
+        });
+    }
+
+    function getAllQuizzes() {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var quizzes = [];
+        db.transaction(function(tx) {
+            var res = tx.executeSql("SELECT q.quiz_id, q.title, q.description, u.username FROM Quizzes q JOIN Users u ON q.created_by = u.user_id ORDER BY q.created_at DESC");
+            for (var i = 0; i < res.rows.length; i++) {
+                quizzes.push({
+                    quiz_id: res.rows.item(i).quiz_id,
+                    title: res.rows.item(i).title,
+                    description: res.rows.item(i).description,
+                    creator: res.rows.item(i).username
+                });
+            }
+        });
+        console.log("Loaded", quizzes.length, "quizzes");
+        return quizzes;
+    }
+
+    function getMyQuizzes() {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var quizzes = [];
+        db.transaction(function(tx) {
+            var res = tx.executeSql("SELECT quiz_id, title, description, created_at FROM Quizzes WHERE created_by = ? ORDER BY created_at DESC",
+                [currentUser.user_id]);
+            for (var i = 0; i < res.rows.length; i++) {
+                quizzes.push({
+                    quiz_id: res.rows.item(i).quiz_id,
+                    title: res.rows.item(i).title,
+                    description: res.rows.item(i).description,
+                    created_at: res.rows.item(i).created_at
+                });
+            }
+        });
+        console.log("Loaded", quizzes.length, "my quizzes");
+        return quizzes;
+    }
+
+    function getQuizQuestions(quizId) {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var questions = [];
+        db.transaction(function(tx) {
+            var qRes = tx.executeSql("SELECT question_id, text FROM Questions WHERE quiz_id = ? ORDER BY question_id", [quizId]);
+            for (var i = 0; i < qRes.rows.length; i++) {
+                var q = qRes.rows.item(i);
+                var options = [];
+                var oRes = tx.executeSql("SELECT option_id, text, is_correct FROM Options WHERE question_id = ? ORDER BY option_id",
+                    [q.question_id]);
+                for (var j = 0; j < oRes.rows.length; j++) {
+                    options.push({
+                        option_id: oRes.rows.item(j).option_id,
+                        text: oRes.rows.item(j).text,
+                        is_correct: oRes.rows.item(j).is_correct
+                    });
+                }
+                questions.push({
+                    question_id: q.question_id,
+                    text: q.text,
+                    options: options
+                });
+            }
+        });
+        console.log("Loaded", questions.length, "questions for quiz", quizId);
+        return questions;
+    }
+
+    function submitQuiz(quizId) {
+        console.log("submitQuiz called for quiz ID:", quizId);
+        console.log("User answers:", JSON.stringify(userAnswers));
+
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var score = 0;
+        var total = 0;
+
+        db.transaction(function(tx) {
+            for (var qId in userAnswers) {
+                if (userAnswers.hasOwnProperty(qId)) {
+                    total++;
+                    var optId = userAnswers[qId];
+                    console.log("Checking question", qId, "with answer option", optId);
+
+                    var res = tx.executeSql("SELECT is_correct FROM Options WHERE option_id = ?", [optId]);
+                    if (res.rows.length > 0) {
+                        var isCorrect = res.rows.item(0).is_correct;
+                        console.log("Option", optId, "is correct:", isCorrect);
+                        if (isCorrect === 1) {
+                            score++;
+                        }
+                    }
+                }
+            }
+
+            var percent = total > 0 ? Math.round((score / total) * 100) : 0;
+            console.log("Final score:", score, "/", total, "=", percent + "%");
+
+            tx.executeSql("INSERT INTO UserQuizzes (user_id, quiz_id, score) VALUES (?, ?, ?)",
+                [currentUser.user_id, quizId, percent]);
+            console.log("Score saved to database");
+        });
+
+        var percent = total > 0 ? Math.round((score / total) * 100) : 0;
+        userAnswers = ({});
+        return percent;
+    }
+
+    function getMyScores() {
+        var db = Sql.LocalStorage.openDatabaseSync(dbPath, "1.0", "QuizSystemDB", 1000000);
+        var scores = [];
+        db.transaction(function(tx) {
+            var res = tx.executeSql("SELECT uq.score, uq.completed_at, q.title FROM UserQuizzes uq JOIN Quizzes q ON uq.quiz_id = q.quiz_id WHERE uq.user_id = ? ORDER BY uq.completed_at DESC",
+                [currentUser.user_id]);
+            for (var i = 0; i < res.rows.length; i++) {
+                scores.push({
+                    score: res.rows.item(i).score,
+                    completed_at: res.rows.item(i).completed_at,
+                    title: res.rows.item(i).title
+                });
+            }
+        });
+        return scores;
+    }
+
+    Component.onCompleted: {
+        initDB();
+    }
+
+    StackView {
+        id: stackView
+        anchors.fill: parent
+        initialItem: loginComponent
+        pushEnter: Transition {
+            PropertyAnimation { property: "opacity"; from: 0; to: 1; duration: 300 }
+        }
+        pushExit: Transition {
+            PropertyAnimation { property: "opacity"; from: 1; to: 0; duration: 300 }
+        }
+    }
+
+    // =================== LOGIN COMPONENT ===================
+    Component {
+        id: loginComponent
+        Page {
+            header: ToolBar {
+                Label {
+                    text: "Quiz System"
+                    font.pixelSize: 20
+                    font.bold: true
+                    color: Material.primary
+                    anchors.centerIn: parent
+                }
+            }
+
+            background: Rectangle {
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: "#1e3c72" }
+                    GradientStop { position: 1.0; color: "#2a5298" }
+                }
+            }
+
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 20
+                width: 400
+
+                Label {
+                    text: "Login"
+                    font.pixelSize: 28
+                    font.bold: true
+                    color: "white"
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                ColumnLayout {
+                    spacing: 15
+
+                    TextField {
+                        id: usernameInput
+                        placeholderText: "Username"
+                        Layout.fillWidth: true
+                        color: "black"
+                        placeholderTextColor: "#BBBBBB"
+                        background: Rectangle {
+                            radius: 8
+                            color: Material.color(Material.Grey, Material.Shade200)
+                            border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                            border.width: parent.focus ? 2 : 1
+                        }
+                    }
+
+                    TextField {
+                        id: passwordInput
+                        placeholderText: "Password"
+                        echoMode: TextInput.Password
+                        Layout.fillWidth: true
+                        color: "black"
+                        placeholderTextColor: "#BBBBBB"
+                        background: Rectangle {
+                            radius: 8
+                            color: Material.color(Material.Grey, Material.Shade200)
+                            border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                            border.width: parent.focus ? 2 : 1
+                        }
+                        Keys.onReturnPressed: loginBtn.clicked()
+                    }
+
+                    Label {
+                        id: loginError
+                        text: ""
+                        color: "#FF5252"
+                        font.pixelSize: 12
+                        visible: text !== ""
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                Button {
+                    id: loginBtn
+                    text: "Login"
+                    Layout.fillWidth: true
+                    font.pixelSize: 14
+                    font.bold: true
+                    Material.foreground: buttonTextColor
+                    background: Rectangle {
+                        radius: buttonRadius
+                        color: buttonBgColor
+                    }
+                    onClicked: {
+                        loginError.text = "";
+                        if (usernameInput.text === "" || passwordInput.text === "") {
+                            loginError.text = "Username and password are required";
+                            return;
+                        }
+
+                        var user = loginUser(usernameInput.text, passwordInput.text);
+                        if (user) {
+                            currentUser = user;
+                            if (user.role === "admin") {
+                                stackView.push(adminComponent);
+                            } else {
+                                stackView.push(userComponent);
+                            }
+                        } else {
+                            loginError.text = "Invalid username or password";
+                        }
+                    }
+                }
+
+                Button {
+                    text: "Register"
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    Material.foreground: Material.accent
+                    background: Rectangle { color: "transparent" }
+                    onClicked: stackView.push(registerComponent)
+                }
+            }
+        }
+    }
+
+    // =================== REGISTER COMPONENT ===================
+    Component {
+        id: registerComponent
+        Page {
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    ToolButton {
+                        text: "←"
+                        font.pixelSize: 24
+                        onClicked: stackView.pop()
+                    }
+                    Label {
+                        text: "Register"
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ScrollView {
+                anchors.fill: parent
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    spacing: 20
+                    width: 450
+
+                    Label {
+                        text: "Create New Account"
+                        font.pixelSize: 24
+                        font.bold: true
+                        color: Material.primary
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+
+                    ColumnLayout {
+                        spacing: 15
+
+                        TextField {
+                            id: regUsernameInput
+                            placeholderText: "Username"
+                            Layout.fillWidth: true
+                            color: "black"
+                            placeholderTextColor: "#BBBBBB"
+                            background: Rectangle {
+                                radius: 8
+                                color: Material.color(Material.Grey, Material.Shade200)
+                                border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                                border.width: parent.focus ? 2 : 1
+                            }
+                        }
+
+                        TextField {
+                            id: regPasswordInput
+                            placeholderText: "Password (Min 8 characters)"
+                            echoMode: TextInput.Password
+                            Layout.fillWidth: true
+                            color: "black"
+                            placeholderTextColor: "#BBBBBB"
+                            background: Rectangle {
+                                radius: 8
+                                color: Material.color(Material.Grey, Material.Shade200)
+                                border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                                border.width: parent.focus ? 2 : 1
+                            }
+                        }
+
+                        TextField {
+                            id: regConfirmPasswordInput
+                            placeholderText: "Confirm Password"
+                            echoMode: TextInput.Password
+                            Layout.fillWidth: true
+                            color: "black"
+                            placeholderTextColor: "#BBBBBB"
+                            background: Rectangle {
+                                radius: 8
+                                color: Material.color(Material.Grey, Material.Shade200)
+                                border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                                border.width: parent.focus ? 2 : 1
+                            }
+                        }
+
+                        Label {
+                            text: "Register as:"
+                            font.pixelSize: 14
+                            color: Material.primary
+                            Layout.topMargin: 10
+                        }
+
+                        ButtonGroup { id: roleGroup }
+
+                        RadioButton {
+                            id: quizTakerRadio
+                            text: "Quiz Taker (Take quizzes and view scores)"
+                            checked: true
+                            ButtonGroup.group: roleGroup
+                            Material.accent: Material.Teal
+
+                            contentItem: Text {
+                                text: parent.text
+                                font: parent.font
+                                color: "white"
+                                verticalAlignment: Text.AlignVCenter
+                                leftPadding: parent.indicator.width + parent.spacing
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+
+                        RadioButton {
+                            id: quizCreatorRadio
+                            text: "Quiz Creator (Create and manage quizzes)"
+                            ButtonGroup.group: roleGroup
+                            Material.accent: Material.Orange
+
+                            contentItem: Text {
+                                text: parent.text
+                                font: parent.font
+                                color: "white"
+                                verticalAlignment: Text.AlignVCenter
+                                leftPadding: parent.indicator.width + parent.spacing
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+
+                        Label {
+                            id: regError
+                            text: ""
+                            color: "#FF5252"
+                            font.pixelSize: 12
+                            visible: text !== ""
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Label {
+                            id: regSuccess
+                            text: ""
+                            color: "#4CAF50"
+                            font.pixelSize: 12
+                            visible: text !== ""
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Button {
+                        text: "Register"
+                        Layout.fillWidth: true
+                        font.pixelSize: 14
+                        font.bold: true
+                        Material.foreground: buttonTextColor
+                        background: Rectangle {
+                            radius: buttonRadius
+                            color: buttonBgColor
+                        }
+                        onClicked: {
+                            regError.text = "";
+                            regSuccess.text = "";
+
+                            if (regUsernameInput.text === "") {
+                                regError.text = "Username is required";
+                                return;
+                            }
+                            if (regPasswordInput.text.length < 8) {
+                                regError.text = "Password must be at least 8 characters long";
+                                return;
+                            }
+                            if (regPasswordInput.text !== regConfirmPasswordInput.text) {
+                                regError.text = "Passwords do not match";
+                                return;
+                            }
+
+                            var role = quizCreatorRadio.checked ? "admin" : "user";
+
+                            if (registerUser(regUsernameInput.text, regPasswordInput.text, role)) {
+                                regSuccess.text = "Registration successful! Redirecting to login...";
+                                regTimer.start();
+                            } else {
+                                regError.text = "Registration failed. Username already exists.";
+                            }
+                        }
+                    }
+
+                    Timer {
+                        id: regTimer
+                        interval: 1500
+                        onTriggered: stackView.pop()
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== ADMIN COMPONENT (Quiz Creator) ===================
+    Component {
+        id: adminComponent
+        Page {
+            id: adminPage
+            property var myQuizzes: []
+
+            Component.onCompleted: {
+                myQuizzes = getMyQuizzes();
+            }
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    Label {
+                        text: "Quiz Creator Dashboard"
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        text: "Refresh"
+                        font.pixelSize: 12
+                        Material.foreground: Material.accent
+                        background: Rectangle { color: "transparent" }
+                        onClicked: {
+                            adminPage.myQuizzes = getMyQuizzes();
+                            quizListView.model = adminPage.myQuizzes;
+                        }
+                    }
+                    Button {
+                        text: "Logout"
+                        font.pixelSize: 12
+                        Material.foreground: Material.accent
+                        background: Rectangle { color: "transparent" }
+                        onClicked: {
+                            currentUser = null;
+                            stackView.clear();
+                            stackView.push(loginComponent);
+                        }
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 40
+                spacing: 20
+
+                Label {
+                    text: "My Created Quizzes (" + adminPage.myQuizzes.length + ")"
+                    font.pixelSize: 24
+                    font.bold: true
+                    color: Material.primary
+                }
+
+                ListView {
+                    id: quizListView
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    model: adminPage.myQuizzes
+                    spacing: 10
+                    clip: true
+
+                    delegate: Item {
+                        width: ListView.view.width
+                        height: 120
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            radius: 8
+                            color: Material.color(Material.Grey, Material.Shade100)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 15
+                                spacing: 5
+
+                                Text {
+                                    text: modelData.title
+                                    font.bold: true
+                                    font.pixelSize: 16
+                                    color: Material.primary
+                                    Layout.fillWidth: true
+                                }
+
+                                Text {
+                                    text: modelData.description || "No description"
+                                    wrapMode: Text.WordWrap
+                                    color: Material.color(Material.Grey, Material.Shade900)
+                                    Layout.fillWidth: true
+                                }
+
+                                Text {
+                                    text: "Created: " + modelData.created_at
+                                    font.pixelSize: 10
+                                    color: Material.color(Material.Grey, Material.Shade700)
+                                }
+
+                                Text {
+                                    text: "Questions: " + getQuizQuestions(modelData.quiz_id).length
+                                    font.pixelSize: 10
+                                    color: Material.color(Material.Teal)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    text: "Create New Quiz"
+                    Layout.fillWidth: true
+                    font.pixelSize: 14
+                    font.bold: true
+                    Material.foreground: buttonTextColor
+                    background: Rectangle {
+                        radius: buttonRadius
+                        color: buttonBgColor
+                    }
+                    onClicked: stackView.push(createQuizComponent)
+                }
+            }
+        }
+    }
+
+    // =================== CREATE QUIZ COMPONENT ===================
+    Component {
+        id: createQuizComponent
+        Page {
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    ToolButton {
+                        text: "←"
+                        font.pixelSize: 24
+                        onClicked: stackView.pop()
+                    }
+                    Label {
+                        text: "Create Quiz"
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 40
+                spacing: 20
+
+                TextField {
+                    id: titleInput
+                    placeholderText: "Quiz Title"
+                    Layout.fillWidth: true
+                    color: "black"
+                    placeholderTextColor: "#BBBBBB"
+                    background: Rectangle {
+                        radius: 8
+                        color: Material.color(Material.Grey, Material.Shade200)
+                        border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                        border.width: parent.focus ? 2 : 1
+                    }
+                }
+
+                TextArea {
+                    id: descInput
+                    placeholderText: "Description"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 80
+                    color: "black"
+                    placeholderTextColor: "#BBBBBB"
+                    background: Rectangle {
+                        radius: 8
+                        color: Material.color(Material.Grey, Material.Shade200)
+                        border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                        border.width: parent.focus ? 2 : 1
+                    }
+                }
+
+                Label {
+                    id: createQuizError
+                    text: ""
+                    color: "#FF5252"
+                    font.pixelSize: 12
+                    visible: text !== ""
+                }
+
+                Button {
+                    text: "Create & Add Questions"
+                    Layout.fillWidth: true
+                    font.pixelSize: 14
+                    font.bold: true
+                    Material.foreground: buttonTextColor
+                    background: Rectangle {
+                        radius: buttonRadius
+                        color: buttonBgColor
+                    }
+                    onClicked: {
+                        createQuizError.text = "";
+                        if (titleInput.text === "") {
+                            createQuizError.text = "Quiz title is required";
+                            return;
+                        }
+
+                        var quizId = createQuiz(titleInput.text, descInput.text);
+                        if (quizId > 0) {
+                            currentQuiz = {
+                                quiz_id: quizId,
+                                title: titleInput.text,
+                                description: descInput.text
+                            };
+                            stackView.push(createQuestionComponent);
+                        } else {
+                            createQuizError.text = "Failed to create quiz";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== CREATE QUESTION COMPONENT ===================
+    Component {
+        id: createQuestionComponent
+        Page {
+            property int questionCount: 0
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    ToolButton {
+                        text: "←"
+                        font.pixelSize: 24
+                        onClicked: {
+                            stackView.pop();
+                            stackView.pop();
+                        }
+                    }
+                    Label {
+                        text: "Add Question #" + (questionCount + 1)
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ScrollView {
+                anchors.fill: parent
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    anchors { left: parent.left; right: parent.right; margins: 20 }
+                    spacing: 20
+
+                    Label {
+                        text: "Quiz: " + (currentQuiz ? currentQuiz.title : "")
+                        font.pixelSize: 14
+                        color: Material.primary
+                        font.bold: true
+                    }
+
+                    TextArea {
+                        id: qTextInput
+                        placeholderText: "Enter Question Text"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 80
+                        color: "black"
+                        background: Rectangle {
+                            radius: 8
+                            color: Material.color(Material.Grey, Material.Shade200)
+                            border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                            border.width: parent.focus ? 2 : 1
+                        }
+                    }
+
+                    Label {
+                        text: "Options (Check correct answers)"
+                        font.bold: true
+                        color: Material.primary
+                    }
+
+                    Repeater {
+                        id: optionsRepeater
+                        model: 4
+
+                        RowLayout {
+                            spacing: 10
+                            Layout.fillWidth: true
+
+                            TextField {
+                                id: optInput
+                                placeholderText: "Option " + (index + 1)
+                                Layout.fillWidth: true
+                                color: "black"
+                                background: Rectangle {
+                                    radius: 8
+                                    color: Material.color(Material.Grey, Material.Shade200)
+                                    border.color: parent.focus ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                                    border.width: parent.focus ? 2 : 1
+                                }
+                            }
+
+                            CheckBox {
+                                id: correctCheck
+                                text: "Correct"
+                                Material.accent: Material.Orange
+
+                                // Make text white
+                                contentItem: Text {
+                                    text: parent.text
+                                    font: parent.font
+                                    color: "black"
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: parent.indicator.width + parent.spacing
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        id: questionError
+                        text: ""
+                        color: "#FF5252"
+                        font.pixelSize: 12
+                        visible: text !== ""
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Button {
+                            text: "Add Question"
+                            Layout.fillWidth: true
+                            font.pixelSize: 14
+                            font.bold: true
+                            Material.foreground: buttonTextColor
+                            background: Rectangle {
+                                radius: buttonRadius
+                                color: buttonBgColor
+                            }
+                            onClicked: {
+                                questionError.text = "";
+                                if (qTextInput.text === "") {
+                                    questionError.text = "Question text is required";
+                                    return;
+                                }
+
+                                var hasCorrect = false;
+                                var hasOptions = false;
+                                var options = [];
+
+                                // Collect options
+                                for (var i = 0; i < 4; i++) {
+                                    var optRow = optionsRepeater.itemAt(i);
+                                    var textField = optRow.children[0];
+                                    var checkbox = optRow.children[1];
+
+                                    if (textField.text !== "") {
+                                        hasOptions = true;
+                                        options.push({
+                                            text: textField.text,
+                                            isCorrect: checkbox.checked
+                                        });
+                                        if (checkbox.checked) hasCorrect = true;
+                                    }
+                                }
+
+                                if (!hasOptions) {
+                                    questionError.text = "At least one option is required";
+                                    return;
+                                }
+                                if (!hasCorrect) {
+                                    questionError.text = "Please mark at least one option as correct";
+                                    return;
+                                }
+
+                                // Add question
+                                var questionId = addQuestion(currentQuiz.quiz_id, qTextInput.text);
+
+                                // Add options
+                                for (var j = 0; j < options.length; j++) {
+                                    addOption(questionId, options[j].text, options[j].isCorrect);
+                                }
+
+                                questionCount++;
+                                qTextInput.text = "";
+
+                                // Reset options
+                                for (var k = 0; k < 4; k++) {
+                                    var resetRow = optionsRepeater.itemAt(k);
+                                    resetRow.children[0].text = "";
+                                    resetRow.children[1].checked = false;
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: "Finish Quiz"
+                            Layout.fillWidth: true
+                            font.pixelSize: 14
+                            font.bold: true
+                            enabled: questionCount >= 1
+                            Material.foreground: buttonTextColor
+                            background: Rectangle {
+                                radius: buttonRadius
+                                color: enabled ? Material.accent : Material.color(Material.Grey, Material.Shade400)
+                            }
+                            onClicked: {
+                                if (questionCount >= 1) {
+                                    stackView.pop();
+                                    stackView.pop();
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        text: "Questions added: " + questionCount + " (Minimum 1 required)"
+                        font.pixelSize: 12
+                        color: questionCount >= 1 ? Material.color(Material.Green) : Material.color(Material.Grey)
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== USER COMPONENT (Quiz Taker) ===================
+    Component {
+        id: userComponent
+        Page {
+            id: userPage
+            property var availableQuizzes: []
+
+            Component.onCompleted: {
+                availableQuizzes = getAllQuizzes();
+            }
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    Label {
+                        text: "Available Quizzes"
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        text: "My Scores"
+                        font.pixelSize: 12
+                        Material.foreground: Material.accent
+                        background: Rectangle { color: "transparent" }
+                        onClicked: stackView.push(scoresComponent)
+                    }
+                    Button {
+                        text: "Refresh"
+                        font.pixelSize: 12
+                        Material.foreground: Material.accent
+                        background: Rectangle { color: "transparent" }
+                        onClicked: {
+                            userPage.availableQuizzes = getAllQuizzes();
+                            userQuizListView.model = userPage.availableQuizzes;
+                        }
+                    }
+                    Button {
+                        text: "Logout"
+                        font.pixelSize: 12
+                        Material.foreground: Material.accent
+                        background: Rectangle { color: "transparent" }
+                        onClicked: {
+                            currentUser = null;
+                            stackView.clear();
+                            stackView.push(loginComponent);
+                        }
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 20
+
+                Label {
+                    text: "Select a quiz to start (" + userPage.availableQuizzes.length + " available)"
+                    font.pixelSize: 18
+                    color: Material.primary
+                }
+
+                ListView {
+                    id: userQuizListView
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    model: userPage.availableQuizzes
+                    spacing: 10
+                    clip: true
+
+                    delegate: Item {
+                        width: ListView.view.width
+                        height: 140
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            radius: 12
+                            color: Material.color(Material.Grey, Material.Shade200)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 20
+                                spacing: 10
+
+                                Text {
+                                    text: modelData.title
+                                    font.pixelSize: 18
+                                    font.bold: true
+                                    color: Material.primary
+                                    Layout.fillWidth: true
+                                }
+
+                                Text {
+                                    text: modelData.description || "No description"
+                                    wrapMode: Text.WordWrap
+                                    color: Material.color(Material.Grey, Material.Shade900)
+                                    Layout.fillWidth: true
+                                }
+
+                                Text {
+                                    text: "Created by: " + modelData.creator
+                                    font.pixelSize: 10
+                                    color: Material.color(Material.Teal)
+                                }
+
+                                Text {
+                                    text: "Questions: " + getQuizQuestions(modelData.quiz_id).length
+                                    font.pixelSize: 10
+                                    color: Material.color(Material.Grey, Material.Shade700)
+                                }
+
+                                Button {
+                                    text: "Start Quiz"
+                                    Layout.alignment: Qt.AlignRight
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                    Material.foreground: buttonTextColor
+                                    background: Rectangle {
+                                        radius: buttonRadius
+                                        color: Material.accent
+                                    }
+                                    onClicked: {
+                                        currentQuiz = modelData;
+                                        userAnswers = ({});
+                                        stackView.push(quizTakeComponent);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== SCORES COMPONENT ===================
+    Component {
+        id: scoresComponent
+        Page {
+            property var myScores: getMyScores()
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    ToolButton {
+                        text: "←"
+                        font.pixelSize: 24
+                        onClicked: stackView.pop()
+                    }
+                    Label {
+                        text: "My Scores"
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 40
+                spacing: 20
+
+                Label {
+                    text: "Quiz History (" + myScores.length + " completed)"
+                    font.pixelSize: 24
+                    font.bold: true
+                    color: Material.primary
+                }
+
+                ListView {
+                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    model: myScores
+                    spacing: 10
+                    clip: true
+
+                    delegate: Item {
+                        width: ListView.view.width
+                        height: 80
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            radius: 8
+                            color: modelData.score >= 70 ? Material.color(Material.Green, Material.Shade100) :
+                                   modelData.score >= 50 ? Material.color(Material.Orange, Material.Shade100) :
+                                   Material.color(Material.Red, Material.Shade100)
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 15
+                                spacing: 20
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+
+                                    Text {
+                                        text: modelData.title
+                                        font.bold: true
+                                        font.pixelSize: 16
+                                        color: Material.primary
+                                    }
+
+                                    Text {
+                                        text: "Completed: " + modelData.completed_at
+                                        font.pixelSize: 10
+                                        color: Material.color(Material.Grey, Material.Shade700)
+                                    }
+                                }
+
+                                Label {
+                                    text: modelData.score + "%"
+                                    font.pixelSize: 28
+                                    font.bold: true
+                                    color: Material.primary
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== QUIZ TAKE COMPONENT ===================
+    Component {
+        id: quizTakeComponent
+        Page {
+            property var quizQuestions: currentQuiz ? getQuizQuestions(currentQuiz.quiz_id) : []
+
+            Component.onCompleted: {
+                console.log("Taking quiz:", currentQuiz.title);
+                console.log("Number of questions:", quizQuestions.length);
+            }
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    ToolButton {
+                        text: "←"
+                        font.pixelSize: 24
+                        onClicked: stackView.pop()
+                    }
+                    Label {
+                        text: "Quiz: " + (currentQuiz ? currentQuiz.title : "")
+                        font.pixelSize: 20
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            background: Rectangle { color: Material.background }
+
+            ScrollView {
+                anchors.fill: parent
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    spacing: 20
+                    anchors { left: parent.left; right: parent.right; margins: 20 }
+
+                    Repeater {
+                        model: quizQuestions
+
+                        delegate: Item {
+                            property int currentQuestionId: modelData.question_id
+                            Layout.fillWidth: true
+                            height: questionLayout.implicitHeight + 40
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 8
+                                color: Material.color(Material.Grey, Material.Shade100)
+                            }
+
+                            ColumnLayout {
+                                id: questionLayout
+                                anchors.fill: parent
+                                anchors.margins: 15
+                                spacing: 10
+
+                                Text {
+                                    text: (index + 1) + ". " + modelData.text
+                                    font.bold: true
+                                    font.pixelSize: 16
+                                    color: Material.primary
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ButtonGroup { id: optionGroup }
+
+                                Column {
+                                    spacing: 8
+
+                                    Repeater {
+                                        model: modelData.options
+
+                                        delegate: RadioButton {
+                                            property int questionId: currentQuestionId
+                                            property int optionId: modelData.option_id
+
+                                            text: modelData.text
+                                            Material.accent: Material.Orange
+                                            ButtonGroup.group: optionGroup
+
+                                            contentItem: Text {
+                                                text: parent.text
+                                                font: parent.font
+                                                color: "black"
+                                                verticalAlignment: Text.AlignVCenter
+                                                leftPadding: parent.indicator.width + parent.spacing
+                                                wrapMode: Text.WordWrap
+                                            }
+
+                                            onCheckedChanged: {
+                                                if (checked) {
+                                                    window.userAnswers[questionId] = optionId;
+                                                    console.log("✓ Saved answer - Question:", questionId, "→ Option:", optionId);
+                                                    console.log("📊 Total answers:", Object.keys(window.userAnswers).length);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        id: submitError
+                        text: ""
+                        color: "#FF5252"
+                        font.pixelSize: 12
+                        visible: text !== ""
+                        Layout.fillWidth: true
+                    }
+
+                    Button {
+                        text: "Submit Quiz"
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.fillWidth: true
+                        font.pixelSize: 14
+                        font.bold: true
+                        Material.foreground: buttonTextColor
+                        background: Rectangle {
+                            radius: buttonRadius
+                            color: buttonBgColor
+                        }
+                        onClicked: {
+                            submitError.text = "";
+
+                            var answeredCount = 0;
+                            for (var key in userAnswers) {
+                                answeredCount++;
+                            }
+
+                            console.log("Answered questions:", answeredCount, "Total questions:", quizQuestions.length);
+                            console.log("User answers:", JSON.stringify(userAnswers));
+
+                            if (answeredCount < quizQuestions.length) {
+                                submitError.text = "Please answer all questions before submitting (" + answeredCount + "/" + quizQuestions.length + ")";
+                                return;
+                            }
+
+                            console.log("Submitting quiz...");
+                            var score = submitQuiz(currentQuiz.quiz_id);
+                            console.log("Score received:", score);
+                            window.resultScore = score;
+                            stackView.push(resultComponent);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== RESULT COMPONENT ===================
+    Component {
+        id: resultComponent
+        Page {
+            header: ToolBar {
+                Label {
+                    text: "Results"
+                    font.pixelSize: 20
+                    anchors.centerIn: parent
+                }
+            }
+
+            background: Rectangle {
+                gradient: Gradient {
+                    GradientStop {
+                        position: 0.0
+                        color: resultScore >= 70 ? "#4CAF50" : resultScore >= 50 ? "#FF9800" : "#F44336"
+                    }
+                    GradientStop {
+                        position: 1.0
+                        color: resultScore >= 70 ? "#8BC34A" : resultScore >= 50 ? "#FFB74D" : "#E57373"
+                    }
+                }
+            }
+
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: 30
+
+                Label {
+                    text: "Your Score: " + Math.round(resultScore) + "%"
+                    font.pixelSize: 36
+                    font.bold: true
+                    color: "white"
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                Label {
+                    text: resultScore >= 70 ? "Excellent! 🎉" : resultScore >= 50 ? "Good Job! 👍" : "Keep Trying! 💪"
+                    font.pixelSize: 18
+                    color: "white"
+                    opacity: 0.9
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                Button {
+                    text: "Back to Quizzes"
+                    Layout.alignment: Qt.AlignHCenter
+                    font.pixelSize: 14
+                    font.bold: true
+                    Material.foreground: Material.primary
+                    background: Rectangle {
+                        radius: buttonRadius
+                        color: "white"
+                    }
+                    onClicked: {
+                        stackView.pop();
+                        stackView.pop();
+                    }
+                }
+            }
+        }
+    }
+}
